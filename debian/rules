@@ -2,7 +2,6 @@
 #!/usr/bin/make -f
 
 export PYBUILD_NAME=stackops
-export PYBUILD_SYSTEM=distutils
 export DH_VERBOSE=1
 
 %:
@@ -12,19 +11,3 @@ override_dh_auto_test:
 
 override_dh_auto_install:
 	dh_auto_install
-
-override_dh_install:
-	dh_install
-	if [ -d src/stackops/scripts ] && [ -n "$(ls -A src/stackops/scripts 2>/dev/null)" ]; then \
-		chmod 755 debian/stackops/usr/lib/python3/dist-packages/stackops/scripts/*.sh || true; \
-	fi
-
-override_dh_installdocs:
-	dh_installdocs README.md || true
-
-override_dh_fixperms:
-	dh_fixperms
-
-override_dh_clean:
-	dh_clean
-	rm -rf build/ *.egg-info/

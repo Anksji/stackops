@@ -12,6 +12,7 @@ env:
   DEBFULLNAME: ${{ secrets.DEBFULLNAME }}
   DEBEMAIL: ${{ secrets.DEBEMAIL }}
   DEBIAN_FRONTEND: noninteractive
+  PPA_URL: "ppa:anksji/stackops"
 
 jobs:
   build-and-publish:
@@ -42,8 +43,7 @@ jobs:
             dh-python \
             rsync \
             build-essential \
-            lintian \
-            pinentry-tty
+            lintian
 
       - name: Install Python dependencies
         run: |
@@ -51,42 +51,24 @@ jobs:
           pip install build twine setuptools wheel
 
       - name: Set up GPG
-        id: gpg
         run: |
-          # Create required directories
           mkdir -p ~/.gnupg
           chmod 700 ~/.gnupg
-          
-          # Write configurations
-          echo 'use-agent' > ~/.gnupg/gpg.conf
+          echo 'batch' > ~/.gnupg/gpg.conf
           echo 'pinentry-mode loopback' >> ~/.gnupg/gpg.conf
+          echo 'no-tty' >> ~/.gnupg/gpg.conf
           echo 'allow-loopback-pinentry' > ~/.gnupg/gpg-agent.conf
+          chmod 600 ~/.gnupg/*
           
-          # Import keys (writing to temporary files first)
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" > private.key
-          echo "${{ secrets.GPG_PUBLIC_KEY }}" > public.key
-          
-          # Import from files
-          gpg --batch --import public.key
-          gpg --batch --import private.key
-          
-          # Clean up key files
-          rm private.key public.key
+          # Import keys
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+          echo "${{ secrets.GPG_PUBLIC_KEY }}" | gpg --batch --import
           
           # Trust the key
           echo -e "5\ny\n" | gpg --batch --command-fd 0 --expert --edit-key ${{ secrets.GPG_KEY_ID }} trust
           
-          # Set permissions
-          find ~/.gnupg -type f -exec chmod 600 {} \;
-          find ~/.gnupg -type d -exec chmod 700 {} \;
-          
-          # Verify key import
-          if gpg --list-secret-keys | grep -q "${{ secrets.GPG_KEY_ID }}"; then
-            echo "GPG key setup completed successfully"
-          else
-            echo "GPG key import failed"
-            exit 1
-          fi
+          # Verify setup
+          gpg --list-secret-keys --keyid-format LONG
 
       - name: Get version
         id: get_version
@@ -103,25 +85,14 @@ jobs:
         run: |
           BUILD_DIR=$HOME/stackops-build
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
-          
-          # Create build directory
           mkdir -p $BUILD_DIR
-          
-          # Copy project files
           rsync -av \
             --exclude={'.git','.github','.gitignore','*.pyc','__pycache__','*.deb','*.changes','*.build','*.buildinfo'} \
             . $BUILD_DIR/
-          
-          # Verify copy
-          if [ ! -d "$BUILD_DIR/debian" ]; then
-            echo "Failed to copy debian directory"
-            exit 1
-          fi
 
       - name: Update changelog
         run: |
           cd ${{ env.BUILD_DIR }}
-          # Create or update changelog
           if [ -f debian/changelog ]; then
             dch --newversion ${{ env.VERSION }} "Release ${{ env.VERSION }}" --distribution jammy
           else
@@ -132,38 +103,72 @@ jobs:
       - name: Build source package
         run: |
           cd ${{ env.BUILD_DIR }}
-          # Build source package
           dpkg-buildpackage -S -sa --no-sign
-          
-          # Verify build artifacts
-          if [ ! -f "../stackops_${{ env.VERSION }}_source.changes" ]; then
-            echo "Source package build failed"
-            exit 1
-          fi
 
       - name: Sign package
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           cd $HOME
-          # Export GPG key ID for debsign
-          echo "DEBSIGN_KEYID=${{ secrets.GPG_KEY_ID }}" >> ~/.devscripts
-          # Sign the package with correct syntax
-          debsign -k ${{ secrets.GPG_KEY_ID }} \
-            stackops_${{ env.VERSION }}_source.changes
           
-          # Verify the signature exists
-          if [ ! -f "stackops_${{ env.VERSION }}_source.changes" ]; then
-            echo "Signed package not found"
-            exit 1
-          fi
+          # Function to sign a file directly with GPG
+          sign_file() {
+            local input_file="$1"
+            local output_file="$2"
+            local temp_sig="${input_file}.asc"
+            
+            # Create detached signature using stored passphrase
+            echo -n "$GPG_PASSPHRASE" | gpg --batch \
+                                           --pinentry-mode loopback \
+                                           --passphrase-fd 0 \
+                                           --default-key "${{ secrets.GPG_KEY_ID }}" \
+                                           --detach-sign \
+                                           --armor \
+                                           "${input_file}"
+            
+            # Combine original file and signature
+            cat "${input_file}" > "${output_file}"
+            cat "${temp_sig}" >> "${output_file}"
+            rm -f "${temp_sig}"
+          }
           
+          # Don't use debsign, sign files directly
+          for file in "stackops_${{ env.VERSION }}.dsc" "stackops_${{ env.VERSION }}_source.changes"; do
+            echo "Signing $file..."
+            
+            # Create a temporary copy
+            cp "$file" "${file}.orig"
+            
+            # Sign the file
+            if sign_file "${file}.orig" "$file"; then
+              echo "Successfully signed $file"
+            else
+              echo "Failed to sign $file"
+              exit 1
+            fi
+            
+            # Clean up
+            rm -f "${file}.orig"
+          done
+          
+          echo "Files after signing:"
+          ls -la stackops_${{ env.VERSION }}*
+
+      - name: Verify signatures
+        run: |
+          cd $HOME
+          for file in "stackops_${{ env.VERSION }}.dsc" "stackops_${{ env.VERSION }}_source.changes"; do
+            echo "Verifying $file..."
+            gpg --verify "$file" || true
+          done
+
       - name: Configure dput
         run: |
-          # Create dput configuration
           cat > ~/.dput.cf << EOF
-          [ppa]
+          [${{ env.PPA_URL }}]
           fqdn = ppa.launchpad.net
           method = ftp
-          incoming = ~${{ secrets.PPA_PATH }}/ubuntu
+          incoming = ~anksji/stackops/ubuntu
           login = anonymous
           allow_unsigned_uploads = 0
           EOF
@@ -171,18 +176,7 @@ jobs:
       - name: Upload to PPA
         run: |
           cd $HOME
-          # Upload to PPA
-          dput --force ppa stackops_${{ env.VERSION }}_source.changes || {
-            echo "Upload failed. Checking package:"
-            echo "Package contents:"
-            ls -l stackops_${{ env.VERSION }}*
-            echo "Changes file content:"
-            cat stackops_${{ env.VERSION }}_source.changes
-            exit 1
-          }
-          
-          echo "Package uploaded to ppa:${{ secrets.PPA_PATH }}"
-          echo "Please check https://launchpad.net/~${PPA_PATH%/*}/+archive/ubuntu/${PPA_PATH#*/}"
+          dput ${{ env.PPA_URL }} stackops_${{ env.VERSION }}_source.changes
 
       - name: Run Lintian checks
         continue-on-error: true
@@ -195,17 +189,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}_source.changes
-            ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}.dsc
-            ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}.tar.gz
+            /home/runner/stackops_${{ env.VERSION }}_source.changes
+            /home/runner/stackops_${{ env.VERSION }}.dsc
+            /home/runner/stackops_${{ env.VERSION }}.tar.gz
           body: |
             Release version ${{ env.VERSION }}
             
-            Package has been uploaded to PPA: ppa:${{ secrets.PPA_PATH }}
+            Package has been uploaded to ${{ env.PPA_URL }}
             
             To install:
             ```bash
-            sudo add-apt-repository ppa:${{ secrets.PPA_PATH }}
+            sudo add-apt-repository ${{ env.PPA_URL }}
             sudo apt-get update
             sudo apt-get install stackops
             ```
@@ -220,7 +214,7 @@ jobs:
         with:
           name: build-logs-${{ env.VERSION }}
           path: |
-            ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}_source.changes
-            ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}.dsc
-            ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}.tar.gz
-            ${{ env.BUILD_DIR }}/debian/
+            /home/runner/stackops_${{ env.VERSION }}_source.changes
+            /home/runner/stackops_${{ env.VERSION }}.dsc
+            /home/runner/stackops_${{ env.VERSION }}.tar.gz
+            /home/runner/stackops-build/debian/

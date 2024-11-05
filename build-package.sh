@@ -201,7 +201,7 @@ EOL
 
 # Create changelog with proper version
 cat > debian/changelog << EOL
-stackops ($VERSION) jammy; urgency=medium
+stackops ($VERSION) noble; urgency=medium
 
   * Release version $VERSION
   * Features included:
