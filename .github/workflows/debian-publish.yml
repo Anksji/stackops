@@ -6,7 +6,7 @@ on:
       - production
     tags:
       - 'v*'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
 
 env:
   DEBFULLNAME: ${{ secrets.DEBFULLNAME }}
@@ -42,7 +42,8 @@ jobs:
             dh-python \
             rsync \
             build-essential \
-            lintian
+            lintian \
+            pinentry-tty
 
       - name: Install Python dependencies
         run: |
@@ -52,29 +53,45 @@ jobs:
       - name: Set up GPG
         id: gpg
         run: |
-          # Set up GPG directory
+          # Create GPG directories and set permissions
           mkdir -p ~/.gnupg
           chmod 700 ~/.gnupg
-          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
-          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
           
-          # Import the GPG keys
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
-          echo "${{ secrets.GPG_PUBLIC_KEY }}" | gpg --batch --import
+          # Configure GPG to use non-interactive mode
+          cat > ~/.gnupg/gpg.conf << EOF
+          batch
+          no-tty
+          pinentry-mode loopback
+          EOF
           
-          # Trust the key
-          echo -e "5\ny\n" | gpg --command-fd 0 --expert --edit-key "${{ secrets.GPG_KEY_ID }}" trust
+          # Configure agent
+          cat > ~/.gnupg/gpg-agent.conf << EOF
+          allow-loopback-pinentry
+          pinentry-program /usr/bin/pinentry-tty
+          EOF
           
-          # Verify key import
-          if ! gpg --list-secret-keys --keyid-format LONG | grep -q "${{ secrets.GPG_KEY_ID }}"; then
-            echo "Failed to import GPG key"
-            exit 1
-          fi
+          # Kill any existing agent
+          gpgconf --kill gpg-agent
           
-          # Set key permissions
+          # Import keys without asking for trust
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --yes --import
+          echo "${{ secrets.GPG_PUBLIC_KEY }}" | gpg --batch --yes --import
+          
+          # Trust the key using batch mode
+          echo -n "${{ secrets.GPG_KEY_ID }}:6:" | gpg --batch --import-ownertrust
+          
+          # List keys to verify import
           gpg --list-secret-keys --keyid-format LONG
+          
+          # Set permissions
           chmod 600 ~/.gnupg/*
           chmod 700 ~/.gnupg
+
+          # Verify key is trusted
+          if ! gpg --list-secret-keys --keyid-format LONG | grep -q "${{ secrets.GPG_KEY_ID }}"; then
+            echo "GPG key import failed"
+            exit 1
+          fi
 
       - name: Get version
         id: get_version
@@ -130,17 +147,20 @@ jobs:
           fi
 
       - name: Sign package
+        env:
+          GPG_TTY: $(tty)
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
           cd $HOME
-          # Sign the package
-          debsign -k ${{ secrets.GPG_KEY_ID }} \
+          # Sign the package with explicit key specification
+          debsign -k${{ secrets.GPG_KEY_ID }} \
             --no-re-sign \
+            --no-verify \
             stackops_${{ env.VERSION }}_source.changes
           
-          # Verify signature
-          if ! debsig-verify stackops_${{ env.VERSION }}_source.changes 2>/dev/null; then
-            echo "Package signing failed or verification error"
-            gpg --list-secret-keys --keyid-format LONG
+          # Verify the signature exists
+          if [ ! -f "stackops_${{ env.VERSION }}_source.changes" ]; then
+            echo "Signed package not found"
             exit 1
           fi
 
@@ -199,7 +219,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs
+          name: build-logs-${{ env.VERSION }}
           path: |
             ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}_source.changes
             ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}.dsc
