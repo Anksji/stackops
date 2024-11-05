@@ -146,10 +146,8 @@ jobs:
           cd $HOME
           # Export GPG key ID for debsign
           echo "DEBSIGN_KEYID=${{ secrets.GPG_KEY_ID }}" >> ~/.devscripts
-          # Sign the package
-          debsign \
-            --no-re-sign \
-            --keyid=${{ secrets.GPG_KEY_ID }} \
+          # Sign the package with correct syntax
+          debsign -k ${{ secrets.GPG_KEY_ID }} \
             stackops_${{ env.VERSION }}_source.changes
           
           # Verify the signature exists
@@ -157,7 +155,7 @@ jobs:
             echo "Signed package not found"
             exit 1
           fi
-
+          
       - name: Configure dput
         run: |
           # Create dput configuration
