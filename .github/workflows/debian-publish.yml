@@ -1,0 +1,207 @@
+name: Build and Publish Debian Package
+
+on:
+  push:
+    branches:
+      - production
+    tags:
+      - 'v*'
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  DEBFULLNAME: ${{ secrets.DEBFULLNAME }}
+  DEBEMAIL: ${{ secrets.DEBEMAIL }}
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            devscripts \
+            debhelper \
+            dh-make \
+            gnupg \
+            python3-all \
+            python3-setuptools \
+            dh-python \
+            rsync \
+            build-essential \
+            lintian
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine setuptools wheel
+
+      - name: Set up GPG
+        id: gpg
+        run: |
+          # Set up GPG directory
+          mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+          
+          # Import the GPG keys
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+          echo "${{ secrets.GPG_PUBLIC_KEY }}" | gpg --batch --import
+          
+          # Trust the key
+          echo -e "5\ny\n" | gpg --command-fd 0 --expert --edit-key "${{ secrets.GPG_KEY_ID }}" trust
+          
+          # Verify key import
+          if ! gpg --list-secret-keys --keyid-format LONG | grep -q "${{ secrets.GPG_KEY_ID }}"; then
+            echo "Failed to import GPG key"
+            exit 1
+          fi
+          
+          # Set key permissions
+          gpg --list-secret-keys --keyid-format LONG
+          chmod 600 ~/.gnupg/*
+          chmod 700 ~/.gnupg
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION=$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Prepare build environment
+        run: |
+          BUILD_DIR=$HOME/stackops-build
+          echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
+          
+          # Create build directory
+          mkdir -p $BUILD_DIR
+          
+          # Copy project files
+          rsync -av \
+            --exclude={'.git','.github','.gitignore','*.pyc','__pycache__','*.deb','*.changes','*.build','*.buildinfo'} \
+            . $BUILD_DIR/
+          
+          # Verify copy
+          if [ ! -d "$BUILD_DIR/debian" ]; then
+            echo "Failed to copy debian directory"
+            exit 1
+          fi
+
+      - name: Update changelog
+        run: |
+          cd ${{ env.BUILD_DIR }}
+          # Create or update changelog
+          if [ -f debian/changelog ]; then
+            dch --newversion ${{ env.VERSION }} "Release ${{ env.VERSION }}" --distribution jammy
+          else
+            dch --create --package stackops --newversion ${{ env.VERSION }} "Initial release" --distribution jammy
+          fi
+          dch --release ""
+
+      - name: Build source package
+        run: |
+          cd ${{ env.BUILD_DIR }}
+          # Build source package
+          dpkg-buildpackage -S -sa --no-sign
+          
+          # Verify build artifacts
+          if [ ! -f "../stackops_${{ env.VERSION }}_source.changes" ]; then
+            echo "Source package build failed"
+            exit 1
+          fi
+
+      - name: Sign package
+        run: |
+          cd $HOME
+          # Sign the package
+          debsign -k ${{ secrets.GPG_KEY_ID }} \
+            --no-re-sign \
+            stackops_${{ env.VERSION }}_source.changes
+          
+          # Verify signature
+          if ! debsig-verify stackops_${{ env.VERSION }}_source.changes 2>/dev/null; then
+            echo "Package signing failed or verification error"
+            gpg --list-secret-keys --keyid-format LONG
+            exit 1
+          fi
+
+      - name: Configure dput
+        run: |
+          # Create dput configuration
+          cat > ~/.dput.cf << EOF
+          [ppa]
+          fqdn = ppa.launchpad.net
+          method = ftp
+          incoming = ~${{ secrets.PPA_PATH }}/ubuntu
+          login = anonymous
+          allow_unsigned_uploads = 0
+          EOF
+
+      - name: Upload to PPA
+        run: |
+          cd $HOME
+          # Upload to PPA
+          dput --force ppa stackops_${{ env.VERSION }}_source.changes
+          
+          echo "Package uploaded to ppa:${{ secrets.PPA_PATH }}"
+          echo "Please check https://launchpad.net/~${PPA_PATH%/*}/+archive/ubuntu/${PPA_PATH#*/}"
+
+      - name: Run Lintian checks
+        continue-on-error: true
+        run: |
+          cd $HOME
+          lintian stackops_${{ env.VERSION }}_source.changes
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}_source.changes
+            ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}.dsc
+            ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}.tar.gz
+          body: |
+            Release version ${{ env.VERSION }}
+            
+            Package has been uploaded to PPA: ppa:${{ secrets.PPA_PATH }}
+            
+            To install:
+            ```bash
+            sudo add-apt-repository ppa:${{ secrets.PPA_PATH }}
+            sudo apt-get update
+            sudo apt-get install stackops
+            ```
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}_source.changes
+            ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}.dsc
+            ${{ env.BUILD_DIR }}/../stackops_${{ env.VERSION }}.tar.gz
+            ${{ env.BUILD_DIR }}/debian/

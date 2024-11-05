@@ -1,0 +1,32 @@
+#!/usr/bin/make -f
+
+export PYBUILD_NAME=stackops
+export PYBUILD_SYSTEM=distutils
+export DH_VERBOSE=1
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+# Skip tests
+override_dh_auto_test:
+	# Tests disabled
+
+override_dh_auto_install:
+	dh_auto_install
+	mkdir -p debian/stackops/usr/share/stackops/scripts
+	if [ -d scripts ]; then \
+		cp -r scripts/* debian/stackops/usr/share/stackops/scripts/ || true; \
+	fi
+
+override_dh_installdocs:
+	dh_installdocs README.md || true
+
+override_dh_fixperms:
+	dh_fixperms
+	if [ -d debian/stackops/usr/share/stackops/scripts ]; then \
+		chmod 755 debian/stackops/usr/share/stackops/scripts/*.sh || true; \
+	fi
+
+override_dh_clean:
+	dh_clean
+	rm -rf build/ *.egg-info/

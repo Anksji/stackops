@@ -1,0 +1,29 @@
+# requirements-dev.txt
+pytest>=7.4.0
+black>=23.3.0
+flake8>=6.0.0
+mypy>=1.3.0
+isort>=5.12.0
+pytest-cov>=4.1.0
+build>=0.10.0
+twine>=4.0.2
+
+#Uses:
+#During Development:
+
+#black: Run after writing code to format it
+#isort: Run along with black to organize imports
+#flake8: Run to check for potential errors
+#mypy: Run to verify type hints are correct
+
+
+#During Testing:
+
+#pytest: Run when you write new tests
+#pytest-cov: Run to ensure good test coverage
+
+
+#During Deployment:
+
+#build: Run when ready to create a distribution
+#twine: Run when ready to publish your package

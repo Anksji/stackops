@@ -1,0 +1,4 @@
+# Format: source-file destination-directory
+src/stackops/* usr/lib/python3/dist-packages/stackops/
+scripts/* usr/share/stackops/scripts/
+README.md usr/share/doc/stackops/

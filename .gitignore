@@ -1,0 +1,19 @@
+@"
+# Python
+__pycache__/
+*.py[cod]
+venv/
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+
+# Logs
+logs/*
+!logs/.gitkeep
+
+# Environment
+.env
+.env.local
+"@ | Out-File -FilePath .gitignore -Encoding utf8
