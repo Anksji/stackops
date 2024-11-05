@@ -53,42 +53,37 @@ jobs:
       - name: Set up GPG
         id: gpg
         run: |
-          # Create GPG directories and set permissions
+          # Create required directories
           mkdir -p ~/.gnupg
           chmod 700 ~/.gnupg
           
-          # Configure GPG to use non-interactive mode
-          cat > ~/.gnupg/gpg.conf << EOF
-          batch
-          no-tty
-          pinentry-mode loopback
-          EOF
+          # Write configurations
+          echo 'use-agent' > ~/.gnupg/gpg.conf
+          echo 'pinentry-mode loopback' >> ~/.gnupg/gpg.conf
+          echo 'allow-loopback-pinentry' > ~/.gnupg/gpg-agent.conf
           
-          # Configure agent
-          cat > ~/.gnupg/gpg-agent.conf << EOF
-          allow-loopback-pinentry
-          pinentry-program /usr/bin/pinentry-tty
-          EOF
+          # Import keys (writing to temporary files first)
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" > private.key
+          echo "${{ secrets.GPG_PUBLIC_KEY }}" > public.key
           
-          # Kill any existing agent
-          gpgconf --kill gpg-agent
+          # Import from files
+          gpg --batch --import public.key
+          gpg --batch --import private.key
           
-          # Import keys without asking for trust
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --yes --import
-          echo "${{ secrets.GPG_PUBLIC_KEY }}" | gpg --batch --yes --import
+          # Clean up key files
+          rm private.key public.key
           
-          # Trust the key using batch mode
-          echo -n "${{ secrets.GPG_KEY_ID }}:6:" | gpg --batch --import-ownertrust
-          
-          # List keys to verify import
-          gpg --list-secret-keys --keyid-format LONG
+          # Trust the key
+          echo -e "5\ny\n" | gpg --batch --command-fd 0 --expert --edit-key ${{ secrets.GPG_KEY_ID }} trust
           
           # Set permissions
-          chmod 600 ~/.gnupg/*
-          chmod 700 ~/.gnupg
-
-          # Verify key is trusted
-          if ! gpg --list-secret-keys --keyid-format LONG | grep -q "${{ secrets.GPG_KEY_ID }}"; then
+          find ~/.gnupg -type f -exec chmod 600 {} \;
+          find ~/.gnupg -type d -exec chmod 700 {} \;
+          
+          # Verify key import
+          if gpg --list-secret-keys | grep -q "${{ secrets.GPG_KEY_ID }}"; then
+            echo "GPG key setup completed successfully"
+          else
             echo "GPG key import failed"
             exit 1
           fi
@@ -147,15 +142,14 @@ jobs:
           fi
 
       - name: Sign package
-        env:
-          GPG_TTY: $(tty)
-          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
           cd $HOME
-          # Sign the package with explicit key specification
-          debsign -k${{ secrets.GPG_KEY_ID }} \
+          # Export GPG key ID for debsign
+          echo "DEBSIGN_KEYID=${{ secrets.GPG_KEY_ID }}" >> ~/.devscripts
+          # Sign the package
+          debsign \
             --no-re-sign \
-            --no-verify \
+            --keyid=${{ secrets.GPG_KEY_ID }} \
             stackops_${{ env.VERSION }}_source.changes
           
           # Verify the signature exists
@@ -180,7 +174,14 @@ jobs:
         run: |
           cd $HOME
           # Upload to PPA
-          dput --force ppa stackops_${{ env.VERSION }}_source.changes
+          dput --force ppa stackops_${{ env.VERSION }}_source.changes || {
+            echo "Upload failed. Checking package:"
+            echo "Package contents:"
+            ls -l stackops_${{ env.VERSION }}*
+            echo "Changes file content:"
+            cat stackops_${{ env.VERSION }}_source.changes
+            exit 1
+          }
           
           echo "Package uploaded to ppa:${{ secrets.PPA_PATH }}"
           echo "Please check https://launchpad.net/~${PPA_PATH%/*}/+archive/ubuntu/${PPA_PATH#*/}"
@@ -189,7 +190,7 @@ jobs:
         continue-on-error: true
         run: |
           cd $HOME
-          lintian stackops_${{ env.VERSION }}_source.changes
+          lintian --verbose stackops_${{ env.VERSION }}_source.changes
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
