@@ -1,12 +1,13 @@
+# debian/control
 Source: stackops
 Section: admin
 Priority: optional
-Maintainer: Ankitraj Dwivedi <ankitrajatwork@gmail.com.com>
+Maintainer: Ankitraj Dwivedi <ankitrajatwork@gmail.com>
 Build-Depends: debhelper-compat (= 13),
                dh-python,
                python3-all,
                python3-setuptools
-Standards-Version: 4.5.1
+Standards-Version: 4.6.2
 Homepage: https://github.com/anksji/stackops
 Rules-Requires-Root: no
 
@@ -14,12 +15,12 @@ Package: stackops
 Architecture: all
 Depends: ${python3:Depends},
          ${misc:Depends},
-         python3-click,
-         nginx,
+         python3-click (>= 7.0),
+         nginx (>= 1.18.0),
          certbot,
          python3-certbot-nginx
 Description: Server Operations Automation Tool
- A tool for automating server setup and configuration tasks.
+ A comprehensive tool for automating server setup and configuration tasks.
  .
  Features:
   * Initial server setup with security configurations
