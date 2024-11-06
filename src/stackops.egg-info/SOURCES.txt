@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+setup.py
+src/stackops/__init__.py
+src/stackops/cli.py
+src/stackops/setup_manager.py
+src/stackops/utils.py
+src/stackops.egg-info/PKG-INFO
+src/stackops.egg-info/SOURCES.txt
+src/stackops.egg-info/dependency_links.txt
+src/stackops.egg-info/entry_points.txt
+src/stackops.egg-info/requires.txt
+src/stackops.egg-info/top_level.txt
+tests/test_setup.py

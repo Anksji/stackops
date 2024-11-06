@@ -43,7 +43,8 @@ jobs:
             dh-python \
             rsync \
             build-essential \
-            lintian
+            lintian \
+            pybuild
 
       - name: Install Python dependencies
         run: |
@@ -52,13 +53,16 @@ jobs:
 
       - name: Set up GPG
         run: |
-          mkdir -p ~/.gnupg
-          chmod 700 ~/.gnupg
-          echo 'batch' > ~/.gnupg/gpg.conf
-          echo 'pinentry-mode loopback' >> ~/.gnupg/gpg.conf
-          echo 'no-tty' >> ~/.gnupg/gpg.conf
-          echo 'allow-loopback-pinentry' > ~/.gnupg/gpg-agent.conf
-          chmod 600 ~/.gnupg/*
+          # Create fresh GPG directory
+          export GNUPGHOME="$(mktemp -d)"
+          chmod 700 "$GNUPGHOME"
+          
+          # Configure GPG
+          cat > "$GNUPGHOME/gpg.conf" << EOF
+          use-agent
+          pinentry-mode loopback
+          no-tty
+          EOF
           
           # Import keys
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
@@ -67,8 +71,12 @@ jobs:
           # Trust the key
           echo -e "5\ny\n" | gpg --batch --command-fd 0 --expert --edit-key ${{ secrets.GPG_KEY_ID }} trust
           
-          # Verify setup
+          # Show imported keys
+          echo "Imported GPG keys:"
           gpg --list-secret-keys --keyid-format LONG
+          
+          # Set global GNUPGHOME for future steps
+          echo "GNUPGHOME=$GNUPGHOME" >> $GITHUB_ENV
 
       - name: Get version
         id: get_version
@@ -89,6 +97,9 @@ jobs:
           rsync -av \
             --exclude={'.git','.github','.gitignore','*.pyc','__pycache__','*.deb','*.changes','*.build','*.buildinfo'} \
             . $BUILD_DIR/
+          
+          # Ensure debian/rules is executable
+          chmod +x $BUILD_DIR/debian/rules
 
       - name: Update changelog
         run: |
@@ -103,6 +114,9 @@ jobs:
       - name: Build source package
         run: |
           cd ${{ env.BUILD_DIR }}
+          # Ensure debian/rules is executable
+          chmod +x debian/rules
+          # Build source package
           dpkg-buildpackage -S -sa --no-sign
 
       - name: Sign package
@@ -111,55 +125,69 @@ jobs:
         run: |
           cd $HOME
           
-          # Function to sign a file directly with GPG
-          sign_file() {
-            local input_file="$1"
-            local output_file="$2"
-            local temp_sig="${input_file}.asc"
-            
-            # Create detached signature using stored passphrase
-            echo -n "$GPG_PASSPHRASE" | gpg --batch \
-                                           --pinentry-mode loopback \
-                                           --passphrase-fd 0 \
-                                           --default-key "${{ secrets.GPG_KEY_ID }}" \
-                                           --detach-sign \
-                                           --armor \
-                                           "${input_file}"
-            
-            # Combine original file and signature
-            cat "${input_file}" > "${output_file}"
-            cat "${temp_sig}" >> "${output_file}"
-            rm -f "${temp_sig}"
-          }
+          # Create a helper script to handle signing
+          cat > /tmp/sign-helper << EOF
+          #!/bin/bash
+          echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 "\$@"
+          EOF
+          chmod +x /tmp/sign-helper
           
-          # Don't use debsign, sign files directly
-          for file in "stackops_${{ env.VERSION }}.dsc" "stackops_${{ env.VERSION }}_source.changes"; do
-            echo "Signing $file..."
+          # Function to sign a file
+          sign_file() {
+            local file="\$1"
+            echo "Signing \$file..."
             
-            # Create a temporary copy
-            cp "$file" "${file}.orig"
+            # Create detached signature
+            /tmp/sign-helper --detach-sign --armor -u ${{ secrets.GPG_KEY_ID }} "\$file"
             
-            # Sign the file
-            if sign_file "${file}.orig" "$file"; then
-              echo "Successfully signed $file"
-            else
-              echo "Failed to sign $file"
-              exit 1
+            if [ ! -f "\$file.asc" ]; then
+              echo "Failed to create signature for \$file"
+              return 1
             fi
             
-            # Clean up
-            rm -f "${file}.orig"
+            # Append signature to original file
+            cat "\$file.asc" >> "\$file"
+            rm "\$file.asc"
+            echo "Successfully signed \$file"
+          }
+          
+          # For debugging: Show files before signing
+          echo "Files before signing:"
+          ls -la stackops_${{ env.VERSION }}*
+          
+          # Sign the required files
+          echo "Attempting to sign files..."
+          for file in stackops_${{ env.VERSION }}.dsc stackops_${{ env.VERSION }}_source.changes; do
+            if [ -f "\$file" ]; then
+              # Create backup
+              cp "\$file" "\$file.backup"
+              
+              # Try to sign
+              if ! sign_file "\$file.backup"; then
+                echo "Signing failed for \$file"
+                # Debug output
+                echo "GPG status:"
+                gpg --list-secret-keys --keyid-format LONG
+                exit 1
+              fi
+              
+              # Replace original with signed version
+              mv "\$file.backup" "\$file"
+            else
+              echo "File not found: \$file"
+              exit 1
+            fi
           done
           
+          # For debugging: Show files after signing
           echo "Files after signing:"
           ls -la stackops_${{ env.VERSION }}*
-
-      - name: Verify signatures
-        run: |
-          cd $HOME
-          for file in "stackops_${{ env.VERSION }}.dsc" "stackops_${{ env.VERSION }}_source.changes"; do
-            echo "Verifying $file..."
-            gpg --verify "$file" || true
+          
+          # Verify signatures
+          echo "Verifying signatures..."
+          for file in stackops_${{ env.VERSION }}.dsc stackops_${{ env.VERSION }}_source.changes; do
+            echo "Verifying \$file..."
+            gpg --verify "\$file" || true
           done
 
       - name: Configure dput

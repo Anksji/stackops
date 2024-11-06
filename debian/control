@@ -2,11 +2,12 @@
 Source: stackops
 Section: admin
 Priority: optional
-Maintainer: $DEBFULLNAME <$DEBEMAIL>
+Maintainer: Ankitraj Dwivedi <ankitrajatwork@gmail.com>
 Build-Depends: debhelper-compat (= 13),
                dh-python,
                python3-all,
-               python3-setuptools
+               python3-setuptools,
+               python3-dev
 Standards-Version: 4.6.2
 Homepage: https://github.com/anksji/stackops
 Rules-Requires-Root: no

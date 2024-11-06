@@ -1,0 +1,8 @@
+Metadata-Version: 2.1
+Name: stackops
+Version: 1.0.1
+Summary: Server Operations Automation Tool
+Author-email: Ankitraj Dwivedi <ankitrajatwork@gmail.com>
+License: MIT
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown

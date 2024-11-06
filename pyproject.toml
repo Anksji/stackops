@@ -1,0 +1,26 @@
+[build-system]
+requires = [
+    "setuptools>=42",
+    "wheel"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stackops"
+version = "1.0.1"
+description = "Server Operations Automation Tool"
+readme = "README.md"
+requires-python = ">=3.6"
+license = {text = "MIT"}
+authors = [
+    {name = "Ankitraj Dwivedi", email = "ankitrajatwork@gmail.com"}
+]
+dependencies = [
+    "click>=7.0",
+]
+
+[project.scripts]
+stackops = "stackops.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

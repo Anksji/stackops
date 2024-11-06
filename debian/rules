@@ -1,13 +1,32 @@
-# debian/rules
 #!/usr/bin/make -f
 
 export PYBUILD_NAME=stackops
 export DH_VERBOSE=1
+export PYBUILD_SYSTEM=distutils
+export DPKG_EXPORT_BUILDFLAGS=1
 
 %:
 	dh $@ --with python3 --buildsystem=pybuild
 
+override_dh_auto_clean:
+	rm -rf build/ *.egg-info/ .pybuild/ debian/.debhelper/ debian/stackops/ debian/files
+	find . -name "*.pyc" -delete
+	find . -name "__pycache__" -delete
+
 override_dh_auto_test:
+	:
 
 override_dh_auto_install:
 	dh_auto_install
+
+override_dh_install:
+	dh_install
+	if [ -d debian/stackops/usr/lib/python3/dist-packages/stackops/scripts ]; then \
+		chmod 755 debian/stackops/usr/lib/python3/dist-packages/stackops/scripts/*.sh || true; \
+	fi
+
+override_dh_missing:
+	dh_missing --fail-missing
+
+override_dh_installdocs:
+	dh_installdocs README.md || true
